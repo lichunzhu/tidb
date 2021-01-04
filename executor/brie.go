@@ -15,12 +15,14 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/br/pkg/glue"
 	"github.com/pingcap/br/pkg/storage"
 	"github.com/pingcap/br/pkg/task"
@@ -309,6 +311,13 @@ func (e *BRIEExec) Next(ctx context.Context, req *chunk.Chunk) error {
 
 	e.info.connID = e.ctx.GetSessionVars().ConnectionID
 	e.info.queueTime = types.CurrentTime(mysql.TypeDatetime)
+
+	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan(fmt.Sprintf("BRIEExec.Next.%s", e.info.kind), opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		ctx = opentracing.ContextWithSpan(ctx, span1)
+	}
+
 	taskCtx, taskID := bq.registerTask(ctx, e.info)
 	defer bq.cancelTask(taskID)
 
