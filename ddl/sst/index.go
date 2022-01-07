@@ -5,8 +5,16 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+
+	"github.com/pingcap/errors"
+	pd "github.com/tikv/pd/client"
+	"go.uber.org/zap"
+
 	"github.com/pingcap/tidb/br/pkg/lightning/backend/local"
+	"github.com/pingcap/tidb/br/pkg/pdutil"
 	"github.com/pingcap/tidb/util/sqlexec"
+
+	"github.com/twmb/murmur3"
 
 	"github.com/pingcap/tidb/br/pkg/lightning/backend"
 	"github.com/pingcap/tidb/br/pkg/lightning/backend/kv"
@@ -15,7 +23,6 @@ import (
 	"github.com/pingcap/tidb/br/pkg/lightning/log"
 	tidbcfg "github.com/pingcap/tidb/config"
 	"github.com/pingcap/tidb/util/logutil"
-	"github.com/twmb/murmur3"
 )
 
 func InitIndexOptimize() {
@@ -187,6 +194,22 @@ func FinishIndexOp(ctx context.Context, startTs uint64, exec sqlexec.RestrictedS
 	if err1 != nil {
 		return fmt.Errorf("engine.Close err:%w", err1)
 	}
+	pdController, err := pdutil.NewPdController(ctx, cluster.PdAddr,
+		nil, pd.SecurityOption{})
+	if err != nil {
+		return errors.Errorf("fail to create pd controller: %v", err)
+	}
+	orig, _, err := pdController.RemoveSchedulersWithOrigin(ctx)
+	if err != nil {
+		return errors.Errorf("fail to create pd controller: %v", err)
+	}
+	cancelFunc := pdController.MakeUndoFunctionByConfig(orig)
+	defer func() {
+		err := cancelFunc(ctx)
+		if err != nil {
+			LogError("fail to undo remove schedule operations", zap.Error(err))
+		}
+	}()
 	// use default value first;
 	err = closeEngine.Import(ctx, int64(config.SplitRegionSize))
 	if err != nil {
