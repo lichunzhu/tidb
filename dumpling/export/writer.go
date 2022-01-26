@@ -199,7 +199,7 @@ func (w *Writer) WriteTableData(meta TableMeta, ir TableDataIR, currentChunk int
 		}
 		defer ir.Close()
 		return w.tryToWriteTableData(tctx, meta, ir, currentChunk)
-	}, newDumpChunkBackoffer(canRebuildConn(conf.Consistency, conf.TransactionalConsistency)))
+	}, newDumpChunkBackoffer(canRebuildConn(conf.Consistency, conf.LessLocking)))
 }
 
 func (w *Writer) tryToWriteTableData(tctx *tcontext.Context, meta TableMeta, ir TableDataIR, curChkIdx int) error {

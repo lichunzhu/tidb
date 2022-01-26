@@ -808,10 +808,13 @@ func resetDBWithSessionParams(tctx *tcontext.Context, db *sql.DB, dsn string, pa
 	return newDB, errors.Trace(err)
 }
 
-func createConnWithConsistency(ctx context.Context, db *sql.DB, repeatableRead bool) (*sql.Conn, error) {
+func createConnWithConsistency(ctx context.Context, db *sql.DB, trxConsistency, repeatableRead bool) (*sql.Conn, error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, errors.Trace(err)
+	}
+	if !trxConsistency {
+		return conn, nil
 	}
 	var query string
 	if repeatableRead {

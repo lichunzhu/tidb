@@ -111,7 +111,7 @@ func (d *Dumper) Dump() (dumpErr error) {
 
 	// for consistency lock, we should get table list at first to generate the lock tables SQL
 	if conf.Consistency == consistencyTypeLock {
-		conn, err = createConnWithConsistency(tctx, pool, repeatableRead)
+		conn, err = createConnWithConsistency(tctx, pool, conf.TransactionalConsistency, repeatableRead)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -137,7 +137,7 @@ func (d *Dumper) Dump() (dumpErr error) {
 		}
 	}()
 
-	metaConn, err := createConnWithConsistency(tctx, pool, repeatableRead)
+	metaConn, err := createConnWithConsistency(tctx, pool, conf.TransactionalConsistency, repeatableRead)
 	if err != nil {
 		return err
 	}
@@ -182,13 +182,13 @@ func (d *Dumper) Dump() (dumpErr error) {
 		}
 		// give up the last broken connection
 		conn.Close()
-		newConn, err1 := createConnWithConsistency(tctx, pool, repeatableRead)
+		newConn, err1 := createConnWithConsistency(tctx, pool, conf.TransactionalConsistency, repeatableRead)
 		if err1 != nil {
 			return conn, errors.Trace(err1)
 		}
 		conn = newConn
 		// renew the master status after connection. dm can't close safe-mode until dm reaches current pos
-		if conf.PosAfterConnect {
+		if conf.PosAfterConnect && conf.TransactionalConsistency {
 			err1 = m.recordGlobalMetaData(conn, conf.ServerInfo.ServerType, true)
 			if err1 != nil {
 				return conn, errors.Trace(err1)
@@ -207,7 +207,7 @@ func (d *Dumper) Dump() (dumpErr error) {
 	}
 	defer tearDownWriters()
 
-	if conf.TransactionalConsistency {
+	if conf.LessLocking {
 		if conf.Consistency == consistencyTypeFlush || conf.Consistency == consistencyTypeLock {
 			tctx.L().Info("All the dumping transactions have started. Start to unlock tables")
 		}
@@ -218,7 +218,7 @@ func (d *Dumper) Dump() (dumpErr error) {
 	// Inject consistency failpoint test after we release the table lock
 	failpoint.Inject("ConsistencyCheck", nil)
 
-	if conf.PosAfterConnect {
+	if conf.PosAfterConnect && conf.TransactionalConsistency {
 		// record again, to provide a location to exit safe mode for DM
 		err = m.recordGlobalMetaData(metaConn, conf.ServerInfo.ServerType, true)
 		if err != nil {
@@ -260,6 +260,14 @@ func (d *Dumper) Dump() (dumpErr error) {
 		summary.CollectFailureUnit("dump table data", err)
 		return errors.Trace(err)
 	}
+	// record again at the end when transactional consistency is false,
+	// because only the position after dump is safe for DM to exit
+	if conf.PosAfterConnect && !conf.TransactionalConsistency {
+		err = m.recordGlobalMetaData(conn, conf.ServerInfo.ServerType, true)
+		if err != nil {
+			tctx.L().Info("get global metadata (after connection pool established) failed", log.ShortError(err))
+		}
+	}
 	summary.CollectSuccessUnit("dump cost", countTotalTask(writers), time.Since(tableDataStartTime))
 
 	summary.SetSuccessStatus(true)
@@ -272,7 +280,7 @@ func (d *Dumper) startWriters(tctx *tcontext.Context, wg *errgroup.Group, taskCh
 	conf, pool := d.conf, d.dbHandle
 	writers := make([]*Writer, conf.Threads)
 	for i := 0; i < conf.Threads; i++ {
-		conn, err := createConnWithConsistency(tctx, pool, needRepeatableRead(conf.ServerInfo.ServerType, conf.Consistency))
+		conn, err := createConnWithConsistency(tctx, pool, conf.TransactionalConsistency, needRepeatableRead(conf.ServerInfo.ServerType, conf.Consistency))
 		if err != nil {
 			return nil, func() {}, err
 		}
@@ -1159,10 +1167,10 @@ func (d *Dumper) dumpSQL(tctx *tcontext.Context, metaConn *sql.Conn, taskChan ch
 	d.sendTaskToChan(tctx, task, taskChan)
 }
 
-func canRebuildConn(consistency string, trxConsistencyOnly bool) bool {
+func canRebuildConn(consistency string, lessLocking bool) bool {
 	switch consistency {
 	case consistencyTypeLock, consistencyTypeFlush:
-		return !trxConsistencyOnly
+		return !lessLocking
 	case consistencyTypeSnapshot, consistencyTypeNone:
 		return true
 	default:

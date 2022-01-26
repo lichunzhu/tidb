@@ -71,6 +71,7 @@ const (
 	flagReadTimeout              = "read-timeout"
 	flagTransactionalConsistency = "transactional-consistency"
 	flagCompress                 = "compress"
+	flagLessLocking              = "less-locking"
 
 	// FlagHelp represents the help flag
 	FlagHelp = "help"
@@ -81,6 +82,7 @@ type Config struct {
 	storage.BackendOptions
 
 	AllowCleartextPasswords  bool
+	LessLocking              bool
 	SortByPk                 bool
 	NoViews                  bool
 	NoHeader                 bool
@@ -260,6 +262,8 @@ func (conf *Config) DefineFlags(flags *pflag.FlagSet) {
 	_ = flags.MarkHidden(flagReadTimeout)
 	flags.Bool(flagTransactionalConsistency, true, "Only support transactional consistency")
 	_ = flags.MarkHidden(flagTransactionalConsistency)
+	flags.Bool(flagLessLocking, true, "Minimize locking time on tables")
+	_ = flags.MarkHidden(flagLessLocking)
 	flags.StringP(flagCompress, "c", "", "Compress output file type, support 'gzip', 'no-compression' now")
 }
 
@@ -404,6 +408,10 @@ func (conf *Config) ParseFromFlags(flags *pflag.FlagSet) error {
 		return errors.Trace(err)
 	}
 	conf.TransactionalConsistency, err = flags.GetBool(flagTransactionalConsistency)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	conf.LessLocking, err = flags.GetBool(flagLessLocking)
 	if err != nil {
 		return errors.Trace(err)
 	}
