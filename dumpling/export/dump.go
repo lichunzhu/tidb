@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/util/codec"
 	pd "github.com/tikv/pd/client"
+	uatomic "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
@@ -58,6 +59,7 @@ type Dumper struct {
 	charsetAndDefaultCollationMap map[string]string
 
 	speedRecorder *SpeedRecorder
+	Error         uatomic.Error
 }
 
 // NewDumper returns a new Dumper
@@ -127,8 +129,17 @@ func (d *Dumper) Dump() (dumpErr error) {
 		err     error
 		conCtrl ConsistencyController
 	)
+	if len(d.conf.Filters) > 0 {
+		d.conf.TableFilter, err = ParseTableFilter(nil, d.conf.Filters)
+		if err != nil {
+			return errors.Errorf("failed to parse filter: %s", err)
+		}
+	}
 	tctx, conf, pool := d.tctx, d.conf, d.dbHandle
+	password := conf.Password
+	conf.Password = "******"
 	tctx.L().Info("begin to run Dump", zap.Stringer("conf", conf))
+	conf.Password = password
 	m := newGlobalMetadata(tctx, d.extStore, conf.Snapshot)
 	repeatableRead := needRepeatableRead(conf.ServerInfo.ServerType, conf.Consistency)
 	defer func() {

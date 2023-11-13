@@ -52,36 +52,39 @@ func (d *Dumper) runLogProgress(tctx *tcontext.Context) {
 
 // DumpStatus is the status of dumping.
 type DumpStatus struct {
-	CompletedTables   float64
-	FinishedBytes     float64
-	FinishedRows      float64
-	EstimateTotalRows float64
-	TotalTables       int64
-	CurrentSpeedBPS   float64
-	Progress          string
+	CompletedTables   float64 `json:"completed-tables"`
+	FinishedBytes     float64 `json:"finished-bytes"`
+	FinishedRows      float64 `json:"finished-rows"`
+	EstimateTotalRows float64 `json:"estimate-total-rows"`
+	TotalTables       int64   `json:"total-tables"`
+	CurrentSpeedBPS   float64 `json:"current-speed-bps"`
+	Progress          string  `json:"progress"`
+	Error             string  `json:"error"`
 }
 
 // GetStatus returns the status of dumping by reading metrics.
 func (d *Dumper) GetStatus() *DumpStatus {
 	ret := &DumpStatus{}
-	ret.TotalTables = atomic.LoadInt64(&d.totalTables)
-	ret.CompletedTables = ReadCounter(d.metrics.finishedTablesCounter)
-	ret.FinishedBytes = ReadGauge(d.metrics.finishedSizeGauge)
-	ret.FinishedRows = ReadGauge(d.metrics.finishedRowsGauge)
-	ret.EstimateTotalRows = ReadCounter(d.metrics.estimateTotalRowsCounter)
-	ret.CurrentSpeedBPS = d.speedRecorder.GetSpeed(ret.FinishedBytes)
-	if d.metrics.progressReady.Load() {
-		// chunks will be zero when upstream has no data
-		if d.metrics.totalChunks.Load() == 0 {
-			ret.Progress = "100 %"
-			return ret
-		}
-		progress := float64(d.metrics.completedChunks.Load()) / float64(d.metrics.totalChunks.Load())
-		if progress > 1 {
-			ret.Progress = "100 %"
-			d.L().Warn("completedChunks is greater than totalChunks", zap.Int64("completedChunks", d.metrics.completedChunks.Load()), zap.Int64("totalChunks", d.metrics.totalChunks.Load()))
-		} else {
-			ret.Progress = fmt.Sprintf("%5.2f %%", progress*100)
+	if d.metrics != nil {
+		ret.TotalTables = atomic.LoadInt64(&d.totalTables)
+		ret.CompletedTables = ReadCounter(d.metrics.finishedTablesCounter)
+		ret.FinishedBytes = ReadGauge(d.metrics.finishedSizeGauge)
+		ret.FinishedRows = ReadGauge(d.metrics.finishedRowsGauge)
+		ret.EstimateTotalRows = ReadCounter(d.metrics.estimateTotalRowsCounter)
+		ret.CurrentSpeedBPS = d.speedRecorder.GetSpeed(ret.FinishedBytes)
+		if d.metrics.progressReady.Load() {
+			// chunks will be zero when upstream has no data
+			if d.metrics.totalChunks.Load() == 0 {
+				ret.Progress = "100 %"
+				return ret
+			}
+			progress := float64(d.metrics.completedChunks.Load()) / float64(d.metrics.totalChunks.Load())
+			if progress > 1 {
+				ret.Progress = "100 %"
+				d.L().Warn("completedChunks is greater than totalChunks", zap.Int64("completedChunks", d.metrics.completedChunks.Load()), zap.Int64("totalChunks", d.metrics.totalChunks.Load()))
+			} else {
+				ret.Progress = fmt.Sprintf("%5.2f %%", progress*100)
+			}
 		}
 	}
 	return ret

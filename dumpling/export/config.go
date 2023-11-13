@@ -101,7 +101,7 @@ type Config struct {
 	Port     int
 	Threads  int
 	User     string
-	Password string `json:"-"`
+	Password string
 	Security struct {
 		DriveTLSName string `json:"-"`
 		CAPath       string
@@ -124,6 +124,7 @@ type Config struct {
 	CsvSeparator  string
 	CsvDelimiter  string
 	Databases     []string
+	Filters       []string
 
 	TableFilter         filter.Filter `json:"-"`
 	Where               string

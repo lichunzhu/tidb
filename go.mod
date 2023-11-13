@@ -114,7 +114,7 @@ require (
 	golang.org/x/net v0.7.0
 	golang.org/x/oauth2 v0.2.0
 	golang.org/x/sync v0.1.0
-	golang.org/x/sys v0.5.0
+	golang.org/x/sys v0.13.0
 	golang.org/x/term v0.5.0
 	golang.org/x/text v0.7.0
 	golang.org/x/time v0.2.0
@@ -127,6 +127,8 @@ require (
 	sourcegraph.com/sourcegraph/appdash v0.0.0-20190731080439-ebfcffb1b5c0
 	sourcegraph.com/sourcegraph/appdash-data v0.0.0-20151005221446-73f23eafcf67
 )
+
+require github.com/fsnotify/fsnotify v1.6.0 // indirect
 
 require (
 	cloud.google.com/go v0.105.0 // indirect
