@@ -60,6 +60,7 @@ type DumpStatus struct {
 	CurrentSpeedBPS   float64 `json:"current-speed-bps"`
 	Progress          string  `json:"progress"`
 	Error             string  `json:"error"`
+	Task              string  `json:"task"`
 }
 
 // GetStatus returns the status of dumping by reading metrics.

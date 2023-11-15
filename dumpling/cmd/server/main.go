@@ -69,21 +69,22 @@ func listen(network, addr string, tlsConfig *tls.Config) (listener net.Listener,
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	taskName := mux.Vars(r)["taskName"]
-	dumpers := make([]*export.Dumper, 0)
+	dumpers := make(map[string]*export.Dumper, 0)
 	s.RLock()
 	for name, dumper := range s.runningTasks {
 		if taskName != "" && name != taskName {
 			continue
 		}
-		dumpers = append(dumpers, dumper)
+		dumpers[name] = dumper
 	}
 	s.RUnlock()
 	dumperStatuses := make([]*export.DumpStatus, 0, len(dumpers))
-	for _, dumper := range dumpers {
+	for name, dumper := range dumpers {
 		dumperStatus := dumper.GetStatus()
 		if err := dumper.Error.Load(); err != nil {
 			dumperStatus.Error = err.Error()
 		}
+		dumperStatus.Task = name
 		dumperStatuses = append(dumperStatuses, dumperStatus)
 	}
 	if err := json.NewEncoder(w).Encode(dumperStatuses); err != nil {
