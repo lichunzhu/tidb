@@ -5,7 +5,10 @@ package export
 import (
 	"bytes"
 	"database/sql"
-	"fmt"
+	"strconv"
+	"unsafe"
+
+	"github.com/pingcap/tidb/types"
 )
 
 var colTypeRowReceiverMap = map[string]func() RowReceiverStringer{}
@@ -208,15 +211,10 @@ func (r RowReceiverArr) BindAddress(args []interface{}) {
 }
 
 // WriteToBuffer implements Stringer.WriteToBuffer
-func (r RowReceiverArr) WriteToBuffer(bf *bytes.Buffer, escapeBackslash bool) {
-	bf.WriteByte('(')
+func (r RowReceiverArr) WriteToBuffer(bf []types.Datum, escapeBackslash bool) {
 	for i, receiver := range r.receivers {
-		receiver.WriteToBuffer(bf, escapeBackslash)
-		if i != len(r.receivers)-1 {
-			bf.WriteByte(',')
-		}
+		receiver.WriteToBuffer(bf[i:i+1], escapeBackslash)
 	}
-	bf.WriteByte(')')
 }
 
 // WriteToBufferInCsv implements Stringer.WriteToBufferInCsv
@@ -234,12 +232,18 @@ type SQLTypeNumber struct {
 	SQLTypeString
 }
 
+// BytesToString converts bytes to string
+func BytesToString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
 // WriteToBuffer implements Stringer.WriteToBuffer
-func (s SQLTypeNumber) WriteToBuffer(bf *bytes.Buffer, _ bool) {
+func (s SQLTypeNumber) WriteToBuffer(bf []types.Datum, _ bool) {
 	if s.RawBytes != nil {
-		bf.Write(s.RawBytes)
+		nb, _ := strconv.ParseInt(BytesToString(s.RawBytes), 10, 64)
+		bf[0].SetInt64(nb)
 	} else {
-		bf.WriteString(nullValue)
+		bf[0].SetNull()
 	}
 }
 
@@ -263,13 +267,11 @@ func (s *SQLTypeString) BindAddress(arg []interface{}) {
 }
 
 // WriteToBuffer implements Stringer.WriteToBuffer
-func (s *SQLTypeString) WriteToBuffer(bf *bytes.Buffer, escapeBackslash bool) {
+func (s *SQLTypeString) WriteToBuffer(bf []types.Datum, escapeBackslash bool) {
 	if s.RawBytes != nil {
-		bf.Write(quotationMark)
-		escapeSQL(s.RawBytes, bf, escapeBackslash)
-		bf.Write(quotationMark)
+		bf[0].SetBytesAsString(s.RawBytes, "utf8mb4_bin", uint32(len(s.RawBytes)))
 	} else {
-		bf.WriteString(nullValue)
+		bf[0].SetNull()
 	}
 }
 
@@ -295,11 +297,11 @@ func (s *SQLTypeBytes) BindAddress(arg []interface{}) {
 }
 
 // WriteToBuffer implements Stringer.WriteToBuffer
-func (s *SQLTypeBytes) WriteToBuffer(bf *bytes.Buffer, _ bool) {
+func (s *SQLTypeBytes) WriteToBuffer(bf []types.Datum, _ bool) {
 	if s.RawBytes != nil {
-		fmt.Fprintf(bf, "x'%x'", s.RawBytes)
+		bf[0].SetBytes(s.RawBytes)
 	} else {
-		bf.WriteString(nullValue)
+		bf[0].SetNull()
 	}
 }
 

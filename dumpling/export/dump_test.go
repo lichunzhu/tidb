@@ -95,12 +95,12 @@ func TestDumpTableMeta(t *testing.T) {
 				WillReturnResult(sqlmock.NewResult(0, 0))
 			hasImplicitRowID = true
 		}
-		mock.ExpectQuery(fmt.Sprintf("SELECT \\* FROM `%s`.`%s`", database, table)).
+		mock.ExpectQuery(fmt.Sprintf("SELECT \\* FROM `%s`.`%s`", database, tableName)).
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
-		meta, err := dumpTableMeta(tctx, conf, baseConn, database, &TableInfo{Type: TableTypeBase, Name: table})
+		meta, err := dumpTableMeta(tctx, conf, baseConn, database, &TableInfo{Type: TableTypeBase, Name: tableName})
 		require.NoError(t, err)
 		require.Equal(t, database, meta.DatabaseName())
-		require.Equal(t, table, meta.TableName())
+		require.Equal(t, tableName, meta.TableName())
 		require.Equal(t, "*", meta.SelectedField())
 		require.Equal(t, 1, meta.SelectedLen())
 		require.Equal(t, "", meta.ShowCreateTable())

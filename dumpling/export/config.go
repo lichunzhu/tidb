@@ -66,6 +66,9 @@ const (
 	flagCA                       = "ca"
 	flagCert                     = "cert"
 	flagKey                      = "key"
+	flagDownCA                   = "down-ca"
+	flagDownCert                 = "down-cert"
+	flagDownKey                  = "down-key"
 	flagCsvSeparator             = "csv-separator"
 	flagCsvDelimiter             = "csv-delimiter"
 	flagOutputFilenameTemplate   = "output-filename-template"
@@ -104,6 +107,15 @@ type Config struct {
 	User     string
 	Password string `json:"-"`
 	Security struct {
+		TLS          *tls.Config `json:"-"`
+		CAPath       string
+		CertPath     string
+		KeyPath      string
+		SSLCABytes   []byte `json:"-"`
+		SSLCertBytes []byte `json:"-"`
+		SSLKeyBytes  []byte `json:"-"`
+	}
+	DownSecurity struct {
 		TLS          *tls.Config `json:"-"`
 		CAPath       string
 		CertPath     string
@@ -298,6 +310,9 @@ func (*Config) DefineFlags(flags *pflag.FlagSet) {
 	flags.String(flagCA, "", "The path name to the certificate authority file for TLS connection")
 	flags.String(flagCert, "", "The path name to the client certificate file for TLS connection")
 	flags.String(flagKey, "", "The path name to the client private key file for TLS connection")
+	flags.String(flagDownCA, "", "The path name to the certificate authority file for down TLS connection")
+	flags.String(flagDownCert, "", "The path name to the client certificate file for down TLS connection")
+	flags.String(flagDownKey, "", "The path name to the client private key file for down TLS connection")
 	flags.String(flagCsvSeparator, ",", "The separator for csv files, default ','")
 	flags.String(flagCsvDelimiter, "\"", "The delimiter for values in csv files, default '\"'")
 	flags.String(flagOutputFilenameTemplate, "", "The output filename template (without file extension)")
@@ -436,6 +451,18 @@ func (conf *Config) ParseFromFlags(flags *pflag.FlagSet) error {
 		return errors.Trace(err)
 	}
 	conf.Security.KeyPath, err = flags.GetString(flagKey)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	conf.DownSecurity.CAPath, err = flags.GetString(flagDownCA)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	conf.DownSecurity.CertPath, err = flags.GetString(flagDownCert)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	conf.DownSecurity.KeyPath, err = flags.GetString(flagDownKey)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -684,6 +711,16 @@ func buildTLSConfig(conf *Config) error {
 		return errors.Trace(err)
 	}
 	conf.Security.TLS = tlsConfig
+	tlsConfig2, err := util.NewTLSConfig(
+		util.WithCAPath(conf.Security.CAPath),
+		util.WithCertAndKeyPath(conf.Security.CertPath, conf.Security.KeyPath),
+		util.WithCAContent(conf.Security.SSLCABytes),
+		util.WithCertAndKeyContent(conf.Security.SSLCertBytes, conf.Security.SSLKeyBytes),
+	)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	conf.DownSecurity.TLS = tlsConfig2
 	return nil
 }
 

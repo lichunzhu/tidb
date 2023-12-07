@@ -11,17 +11,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/docker/go-units"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/br/pkg/summary"
 	tcontext "github.com/pingcap/tidb/dumpling/context"
 	"github.com/pingcap/tidb/dumpling/log"
+	"github.com/pingcap/tidb/types"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
-const lengthLimit = 1048576
+const (
+	lengthLimit             = 1048576
+	maxKVQueueSize          = 32
+	MinDeliverBytes  uint64 = 96 * units.KiB // 96 KB (data + index). batch at least this amount of bytes to reduce number of messages
+	MinDeliverRowCnt        = 4096
+)
 
 var pool = sync.Pool{New: func() interface{} {
 	return &bytes.Buffer{}
@@ -143,50 +150,25 @@ func WriteMeta(tctx *tcontext.Context, meta MetaIR, w storage.ExternalFileWriter
 // WriteInsert writes TableDataIR to a storage.ExternalFileWriter in sql type
 func WriteInsert(
 	pCtx *tcontext.Context,
-	cfg *Config,
 	meta TableMeta,
 	tblIR TableDataIR,
-	w storage.ExternalFileWriter,
-	metrics *metrics,
+	lastRow chan Row,
+	lastRowID int64,
+	nextRow chan struct{},
 ) (n uint64, err error) {
 	fileRowIter := tblIR.Rows()
 	if !fileRowIter.HasNext() {
 		return 0, fileRowIter.Error()
 	}
-
-	bf := pool.Get().(*bytes.Buffer)
-	if bfCap := bf.Cap(); bfCap < lengthLimit {
-		bf.Grow(lengthLimit - bfCap)
-	}
-
-	wp := newWriterPipe(w, cfg.FileSize, cfg.StatementSize, metrics, cfg.Labels)
-
-	// use context.Background here to make sure writerPipe can deplete all the chunks in pipeline
-	ctx, cancel := tcontext.Background().WithLogger(pCtx.L()).WithCancel()
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		wp.Run(ctx)
-		wg.Done()
-	}()
-	defer func() {
-		cancel()
-		wg.Wait()
-	}()
-
-	specCmtIter := meta.SpecialComments()
-	for specCmtIter.HasNext() {
-		bf.WriteString(specCmtIter.Next())
-		bf.WriteByte('\n')
-	}
-	wp.currentFileSize += uint64(bf.Len())
+	defer close(lastRow)
+	defer close(nextRow)
 
 	var (
-		insertStatementPrefix string
-		row                   = MakeRowReceiver(meta.ColumnTypes())
-		counter               uint64
-		lastCounter           uint64
-		escapeBackslash       = cfg.EscapeBackslash
+		row             = MakeRowReceiver(meta.ColumnTypes())
+		counter         uint64
+		lastCounter     uint64
+		escapeBackslash = true
+		bf              = make([]types.Datum, len(meta.ColumnTypes()))
 	)
 
 	defer func() {
@@ -195,97 +177,44 @@ func WriteInsert(
 				zap.String("database", meta.DatabaseName()),
 				zap.String("table", meta.TableName()),
 				zap.Uint64("finished rows", lastCounter),
-				zap.Uint64("finished size", wp.finishedFileSize),
 				log.ShortError(err))
-			SubGauge(metrics.finishedRowsGauge, float64(lastCounter))
-			SubGauge(metrics.finishedSizeGauge, float64(wp.finishedFileSize))
 		} else {
 			pCtx.L().Debug("finish dumping table(chunk)",
 				zap.String("database", meta.DatabaseName()),
 				zap.String("table", meta.TableName()),
-				zap.Uint64("finished rows", counter),
-				zap.Uint64("finished size", wp.finishedFileSize))
-			summary.CollectSuccessUnit(summary.TotalBytes, 1, wp.finishedFileSize)
+				zap.Uint64("finished rows", counter))
 			summary.CollectSuccessUnit("total rows", 1, counter)
 		}
 	}()
 
-	selectedField := meta.SelectedField()
-
-	// if has generated column
-	if selectedField != "" && selectedField != "*" {
-		insertStatementPrefix = fmt.Sprintf("INSERT INTO %s (%s) VALUES\n",
-			wrapBackTicks(escapeString(meta.TableName())), selectedField)
-	} else {
-		insertStatementPrefix = fmt.Sprintf("INSERT INTO %s VALUES\n",
-			wrapBackTicks(escapeString(meta.TableName())))
-	}
-	insertStatementPrefixLen := uint64(len(insertStatementPrefix))
-
+	rowID := lastRowID + 1
 	for fileRowIter.HasNext() {
-		wp.currentStatementSize = 0
-		bf.WriteString(insertStatementPrefix)
-		wp.AddFileSize(insertStatementPrefixLen)
-
 		for fileRowIter.HasNext() {
-			lastBfSize := bf.Len()
-			if selectedField != "" {
-				if err = fileRowIter.Decode(row); err != nil {
-					return counter, errors.Trace(err)
-				}
-				row.WriteToBuffer(bf, escapeBackslash)
-			} else {
-				bf.WriteString("()")
+			if err = fileRowIter.Decode(row); err != nil {
+				return counter, errors.Trace(err)
 			}
+			row.WriteToBuffer(bf, escapeBackslash)
+			rw := Row{
+				Row:   bf,
+				RowID: rowID,
+			}
+			rowID++
+			lastRow <- rw
+			nextRow <- struct{}{}
+
 			counter++
-			wp.AddFileSize(uint64(bf.Len()-lastBfSize) + 2) // 2 is for ",\n" and ";\n"
 			failpoint.Inject("ChaosBrokenWriterConn", func(_ failpoint.Value) {
 				failpoint.Return(0, errors.New("connection is closed"))
 			})
 			failpoint.Inject("AtEveryRow", nil)
-
 			fileRowIter.Next()
-			shouldSwitch := wp.ShouldSwitchStatement()
-			if fileRowIter.HasNext() && !shouldSwitch {
-				bf.WriteString(",\n")
-			} else {
-				bf.WriteString(";\n")
-			}
-			if bf.Len() >= lengthLimit {
-				select {
-				case <-pCtx.Done():
-					return counter, pCtx.Err()
-				case err = <-wp.errCh:
-					return counter, err
-				case wp.input <- bf:
-					bf = pool.Get().(*bytes.Buffer)
-					if bfCap := bf.Cap(); bfCap < lengthLimit {
-						bf.Grow(lengthLimit - bfCap)
-					}
-					AddGauge(metrics.finishedRowsGauge, float64(counter-lastCounter))
-					lastCounter = counter
-				}
-			}
-
-			if shouldSwitch {
-				break
-			}
-		}
-		if wp.ShouldSwitchFile() {
-			break
 		}
 	}
-	if bf.Len() > 0 {
-		wp.input <- bf
-	}
-	close(wp.input)
-	<-wp.closed
-	AddGauge(metrics.finishedRowsGauge, float64(counter-lastCounter))
 	lastCounter = counter
 	if err = fileRowIter.Error(); err != nil {
 		return counter, errors.Trace(err)
 	}
-	return counter, wp.Error()
+	return counter, nil
 }
 
 // WriteInsertInCsv writes TableDataIR to a storage.ExternalFileWriter in csv type
@@ -662,10 +591,11 @@ func (f FileFormat) WriteInsert(
 	tblIR TableDataIR,
 	w storage.ExternalFileWriter,
 	metrics *metrics,
+	lastRow chan Row,
 ) (uint64, error) {
 	switch f {
 	case FileFormatSQLText:
-		return WriteInsert(pCtx, cfg, meta, tblIR, w, metrics)
+		return WriteInsert(pCtx, meta, tblIR, lastRow, 0, nil)
 	case FileFormatCSV:
 		return WriteInsertInCsv(pCtx, cfg, meta, tblIR, w, metrics)
 	default:

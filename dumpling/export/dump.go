@@ -24,19 +24,26 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	pclog "github.com/pingcap/log"
+	"github.com/pingcap/tidb/br/pkg/lightning/backend/kv"
+	"github.com/pingcap/tidb/br/pkg/lightning/checkpoints"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/br/pkg/summary"
 	"github.com/pingcap/tidb/br/pkg/version"
+	"github.com/pingcap/tidb/ddl"
 	"github.com/pingcap/tidb/dumpling/cli"
 	tcontext "github.com/pingcap/tidb/dumpling/context"
 	"github.com/pingcap/tidb/dumpling/log"
 	"github.com/pingcap/tidb/parser"
 	"github.com/pingcap/tidb/parser/ast"
 	"github.com/pingcap/tidb/parser/format"
+	"github.com/pingcap/tidb/parser/model"
+	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/store/helper"
+	"github.com/pingcap/tidb/table/tables"
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/util"
 	"github.com/pingcap/tidb/util/codec"
+	"github.com/pingcap/tidb/util/mock"
 	pd "github.com/tikv/pd/client"
 	gatomic "go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -50,6 +57,17 @@ var errEmptyHandleVals = errors.New("empty handleVals for TiDB table")
 // After TiDB v6.2.0 we always enable tidb_enable_paging by default.
 // see https://docs.pingcap.com/zh/tidb/dev/system-variables#tidb_enable_paging-%E4%BB%8E-v540-%E7%89%88%E6%9C%AC%E5%BC%80%E5%A7%8B%E5%BC%95%E5%85%A5
 var enablePagingVersion = semver.New("6.2.0")
+
+const (
+	createTableSQL = "" +
+		"CREATE TABLE `clustered_cache1` (\n" +
+		"`id` int(11) NOT NULL AUTO_INCREMENT,\n" +
+		"`v` int(11) DEFAULT NULL,\n" +
+		"PRIMARY KEY (`id`) /*T![clustered_index] CLUSTERED */\n" +
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin /*T![auto_id_cache] AUTO_ID_CACHE=1 */;\n"
+	tableID = 80
+	dbName  = "test"
+)
 
 // Dumper is the dump progress structure
 type Dumper struct {
@@ -264,11 +282,10 @@ func (d *Dumper) Dump() (dumpErr error) {
 	AddGauge(d.metrics.taskChannelCapacity, float64(chanSize))
 	wg, writingCtx := errgroup.WithContext(tctx)
 	writerCtx := tctx.WithContext(writingCtx)
-	writers, tearDownWriters, err := d.startWriters(writerCtx, wg, taskOut, rebuildConn)
+	writers, tearDownWriters, err := d.startWriters(d.tctx, wg, taskOut, rebuildConn)
 	if err != nil {
 		return err
 	}
-	defer tearDownWriters()
 
 	if conf.TransactionalConsistency {
 		if conf.Consistency == ConsistencyTypeFlush || conf.Consistency == ConsistencyTypeLock {
@@ -332,21 +349,73 @@ func (d *Dumper) Dump() (dumpErr error) {
 	summary.CollectSuccessUnit("dump cost", countTotalTask(writers), time.Since(tableDataStartTime))
 
 	summary.SetSuccessStatus(true)
+	tearDownWriters()
 	m.recordFinishTime(time.Now())
 	return nil
+}
+
+func createTableInfo(p *parser.Parser, se sessionctx.Context, tableID int64, sql string) (*model.TableInfo, error) {
+	node, err := p.ParseOneStmt(sql, "utf8mb4", "utf8mb4_bin")
+	if err != nil {
+		return nil, err
+	}
+	createStmtNode, ok := node.(*ast.CreateTableStmt)
+	if !ok {
+		return nil, err
+	}
+	info, err := ddl.MockTableInfo(se, createStmtNode, tableID)
+	if err != nil {
+		return nil, err
+	}
+	info.State = model.StatePublic
+	return info, nil
 }
 
 func (d *Dumper) startWriters(tctx *tcontext.Context, wg *errgroup.Group, taskChan <-chan Task,
 	rebuildConnFn func(*sql.Conn, bool) (*sql.Conn, error)) ([]*Writer, func(), error) {
 	conf, pool := d.conf, d.dbHandle
 	writers := make([]*Writer, conf.Threads)
+	localBackend, err := newLocalBackend(d.tctx, conf)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	tableInfo, err := createTableInfo(parser.New(), mock.NewContext(), tableID, createTableSQL)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	tidbTableInfo := &checkpoints.TidbTableInfo{
+		ID:      tableID,
+		DB:      dbName,
+		Name:    tableInfo.Name.O,
+		Core:    tableInfo,
+		Desired: tableInfo,
+	}
+	dataEngine, err := openDataEngine(d.tctx, tidbTableInfo, localBackend, fullTableName, 1)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	indexEngine, err := openIndexEngine(d.tctx, tidbTableInfo, localBackend, fullTableName, -1)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	idAlloc := kv.NewPanickingAllocators(0)
+
+	tbl, err := tables.TableFromMeta(idAlloc, tableInfo)
+	if err != nil {
+		return nil, func() {}, err
+	}
+
 	for i := 0; i < conf.Threads; i++ {
 		conn, err := createConnWithConsistency(tctx, pool, needRepeatableRead(conf.ServerInfo.ServerType, conf.Consistency))
 		if err != nil {
 			return nil, func() {}, err
 		}
-		writer := NewWriter(tctx, int64(i), conf, conn, d.extStore, d.metrics)
+		writer := NewWriter(d.tctx, int64(i), conf, conn, d.extStore, d.metrics)
+		writer.dataEngine = dataEngine
+		writer.indexEngine = indexEngine
+		writer.tableMeta = tbl
 		writer.rebuildConnFn = rebuildConnFn
+		writer.wg = wg
 		writer.setFinishTableCallBack(func(task Task) {
 			if _, ok := task.(*TaskTableData); ok {
 				IncCounter(d.metrics.finishedTablesCounter)
@@ -380,6 +449,27 @@ func (d *Dumper) startWriters(tctx *tcontext.Context, wg *errgroup.Group, taskCh
 	tearDown := func() {
 		for _, w := range writers {
 			_ = w.conn.Close()
+		}
+		err = localBackend.FlushAllEngines(tctx)
+		if err != nil {
+			panic(err)
+		}
+		closedDataEngine, err := dataEngine.Close(d.tctx)
+		if err != nil {
+			d.tctx.L().Error("fail to close dataEngine", zap.Error(err))
+			return
+		}
+		_, err = importAndCleanup(d.tctx, closedDataEngine, localBackend)
+		if err != nil {
+			d.tctx.L().Error("fail to importAndCleanup", zap.Error(err))
+			return
+		}
+		if closedEngine, err := indexEngine.Close(d.tctx); err != nil {
+			d.tctx.L().Error("fail to closeIndexEngine", zap.Error(err))
+			return
+		} else if _, err = importAndCleanup(d.tctx, closedEngine, localBackend); err != nil {
+			d.tctx.L().Error("fail to importAndCleanup", zap.Error(err))
+			return
 		}
 	}
 	return writers, tearDown, nil
@@ -988,11 +1078,11 @@ func selectTiDBTableSample(tctx *tcontext.Context, conn *BaseConn, meta TableMet
 			return errors.Trace(err)
 		}
 		pkValRow := make([]string, 0, pkValNum)
-		for _, rec := range rowRec.receivers {
-			rec.WriteToBuffer(buf, true)
-			pkValRow = append(pkValRow, buf.String())
-			buf.Reset()
-		}
+		// for _, rec := range rowRec.receivers {
+		// 	// rec.WriteToBuffer(buf, true)
+		// 	pkValRow = append(pkValRow, buf.String())
+		// 	buf.Reset()
+		// }
 		pkVals = append(pkVals, pkValRow)
 		return nil
 	}, func() {

@@ -42,8 +42,8 @@ var showIndexHeaders = []string{
 }
 
 const (
-	database = "foo"
-	table    = "bar"
+	database  = "foo"
+	tableName = "bar"
 )
 
 func TestBuildSelectAllQuery(t *testing.T) {
@@ -64,35 +64,35 @@ func TestBuildSelectAllQuery(t *testing.T) {
 	tctx := tcontext.Background().WithLogger(appLogger)
 	baseConn := newBaseConn(conn, true, nil)
 
-	orderByClause, err := buildOrderByClause(tctx, mockConf, baseConn, database, table, true)
+	orderByClause, err := buildOrderByClause(tctx, mockConf, baseConn, database, tableName, true)
 	require.NoError(t, err)
 
 	mock.ExpectQuery("SHOW COLUMNS FROM").
 		WillReturnRows(sqlmock.NewRows([]string{"Field", "Type", "Null", "Key", "Default", "Extra"}).
 			AddRow("id", "int(11)", "NO", "PRI", nil, ""))
 
-	selectedField, _, err := buildSelectField(tctx, baseConn, database, table, false)
+	selectedField, _, err := buildSelectField(tctx, baseConn, database, tableName, false)
 	require.NoError(t, err)
 
-	q := buildSelectQuery(database, table, selectedField, "", "", orderByClause)
-	require.Equal(t, fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY `_tidb_rowid`", database, table), q)
+	q := buildSelectQuery(database, tableName, selectedField, "", "", orderByClause)
+	require.Equal(t, fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY `_tidb_rowid`", database, tableName), q)
 
-	mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)).
+	mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)).
 		WillReturnRows(sqlmock.NewRows(showIndexHeaders).
-			AddRow(table, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", ""))
+			AddRow(tableName, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", ""))
 
-	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, table, false)
+	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, tableName, false)
 	require.NoError(t, err)
 
 	mock.ExpectQuery("SHOW COLUMNS FROM").
 		WillReturnRows(sqlmock.NewRows([]string{"Field", "Type", "Null", "Key", "Default", "Extra"}).
 			AddRow("id", "int(11)", "NO", "PRI", nil, ""))
 
-	selectedField, _, err = buildSelectField(tctx, baseConn, database, table, false)
+	selectedField, _, err = buildSelectField(tctx, baseConn, database, tableName, false)
 	require.NoError(t, err)
 
-	q = buildSelectQuery(database, table, selectedField, "", "", orderByClause)
-	require.Equal(t, fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY `id`", database, table), q)
+	q = buildSelectQuery(database, tableName, selectedField, "", "", orderByClause)
+	require.Equal(t, fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY `id`", database, tableName), q)
 	require.NoError(t, mock.ExpectationsWereMet())
 
 	// Test other servers.
@@ -103,21 +103,21 @@ func TestBuildSelectAllQuery(t *testing.T) {
 		mockConf.ServerInfo.ServerType = serverTp
 		comment := fmt.Sprintf("server type: %s", serverTp)
 
-		mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)).
+		mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)).
 			WillReturnRows(sqlmock.NewRows(showIndexHeaders).
-				AddRow(table, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", ""))
-		orderByClause, err := buildOrderByClause(tctx, mockConf, baseConn, database, table, false)
+				AddRow(tableName, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", ""))
+		orderByClause, err := buildOrderByClause(tctx, mockConf, baseConn, database, tableName, false)
 		require.NoError(t, err, comment)
 
 		mock.ExpectQuery("SHOW COLUMNS FROM").
 			WillReturnRows(sqlmock.NewRows([]string{"Field", "Type", "Null", "Key", "Default", "Extra"}).
 				AddRow("id", "int(11)", "NO", "PRI", nil, ""))
 
-		selectedField, _, err = buildSelectField(tctx, baseConn, database, table, false)
+		selectedField, _, err = buildSelectField(tctx, baseConn, database, tableName, false)
 		require.NoError(t, err, comment)
 
-		q = buildSelectQuery(database, table, selectedField, "", "", orderByClause)
-		require.Equal(t, fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY `id`", database, table), q, comment)
+		q = buildSelectQuery(database, tableName, selectedField, "", "", orderByClause)
+		require.Equal(t, fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY `id`", database, tableName), q, comment)
 
 		err = mock.ExpectationsWereMet()
 		require.NoError(t, err, comment)
@@ -129,10 +129,10 @@ func TestBuildSelectAllQuery(t *testing.T) {
 		mockConf.ServerInfo.ServerType = serverTp
 		comment := fmt.Sprintf("server type: %s", serverTp)
 
-		mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)).
+		mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)).
 			WillReturnRows(sqlmock.NewRows(showIndexHeaders))
 
-		orderByClause, err := buildOrderByClause(tctx, mockConf, baseConn, database, table, false)
+		orderByClause, err := buildOrderByClause(tctx, mockConf, baseConn, database, tableName, false)
 		require.NoError(t, err, comment)
 
 		mock.ExpectQuery("SHOW COLUMNS FROM").
@@ -142,8 +142,8 @@ func TestBuildSelectAllQuery(t *testing.T) {
 		selectedField, _, err = buildSelectField(tctx, baseConn, "test", "t", false)
 		require.NoError(t, err, comment)
 
-		q := buildSelectQuery(database, table, selectedField, "", "", orderByClause)
-		require.Equal(t, fmt.Sprintf("SELECT * FROM `%s`.`%s`", database, table), q, comment)
+		q := buildSelectQuery(database, tableName, selectedField, "", "", orderByClause)
+		require.Equal(t, fmt.Sprintf("SELECT * FROM `%s`.`%s`", database, tableName), q, comment)
 
 		err = mock.ExpectationsWereMet()
 		require.NoError(t, err, comment)
@@ -163,8 +163,8 @@ func TestBuildSelectAllQuery(t *testing.T) {
 		selectedField, _, err := buildSelectField(tctx, baseConn, "test", "t", false)
 		require.NoError(t, err, comment)
 
-		q := buildSelectQuery(database, table, selectedField, "", "", "")
-		require.Equal(t, fmt.Sprintf("SELECT * FROM `%s`.`%s`", database, table), q, comment)
+		q := buildSelectQuery(database, tableName, selectedField, "", "", "")
+		require.Equal(t, fmt.Sprintf("SELECT * FROM `%s`.`%s`", database, tableName), q, comment)
 		require.NoError(t, mock.ExpectationsWereMet(), comment)
 	}
 }
@@ -187,38 +187,38 @@ func TestBuildOrderByClause(t *testing.T) {
 	// Test TiDB server.
 	mockConf.ServerInfo.ServerType = version.ServerTypeTiDB
 
-	orderByClause, err := buildOrderByClause(tctx, mockConf, baseConn, database, table, true)
+	orderByClause, err := buildOrderByClause(tctx, mockConf, baseConn, database, tableName, true)
 	require.NoError(t, err)
 	require.Equal(t, orderByTiDBRowID, orderByClause)
 
-	mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)).
-		WillReturnRows(sqlmock.NewRows(showIndexHeaders).AddRow(table, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", ""))
+	mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)).
+		WillReturnRows(sqlmock.NewRows(showIndexHeaders).AddRow(tableName, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", ""))
 
-	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, table, false)
+	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, tableName, false)
 	require.NoError(t, err)
 	require.Equal(t, "ORDER BY `id`", orderByClause)
 
 	// Test table with primary key.
-	mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)).
-		WillReturnRows(sqlmock.NewRows(showIndexHeaders).AddRow(table, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", ""))
-	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, table, false)
+	mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)).
+		WillReturnRows(sqlmock.NewRows(showIndexHeaders).AddRow(tableName, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", ""))
+	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, tableName, false)
 	require.NoError(t, err)
 	require.Equal(t, "ORDER BY `id`", orderByClause)
 
 	// Test table with joint primary key.
-	mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)).
+	mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)).
 		WillReturnRows(sqlmock.NewRows(showIndexHeaders).
-			AddRow(table, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", "").
-			AddRow(table, 0, "PRIMARY", 2, "name", "A", 0, nil, nil, "", "BTREE", "", ""))
-	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, table, false)
+			AddRow(tableName, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", "").
+			AddRow(tableName, 0, "PRIMARY", 2, "name", "A", 0, nil, nil, "", "BTREE", "", ""))
+	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, tableName, false)
 	require.NoError(t, err)
 	require.Equal(t, "ORDER BY `id`,`name`", orderByClause)
 
 	// Test table without primary key.
-	mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)).
+	mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)).
 		WillReturnRows(sqlmock.NewRows(showIndexHeaders))
 
-	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, table, false)
+	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, tableName, false)
 	require.NoError(t, err)
 	require.Equal(t, "", orderByClause)
 
@@ -227,7 +227,7 @@ func TestBuildOrderByClause(t *testing.T) {
 	for _, hasImplicitRowID := range []bool{false, true} {
 		comment := fmt.Sprintf("current hasImplicitRowID: %v", hasImplicitRowID)
 
-		orderByClause, err := buildOrderByClause(tctx, mockConf, baseConn, database, table, hasImplicitRowID)
+		orderByClause, err := buildOrderByClause(tctx, mockConf, baseConn, database, tableName, hasImplicitRowID)
 		require.NoError(t, err, comment)
 		require.Equal(t, "", orderByClause, comment)
 	}
@@ -236,12 +236,12 @@ func TestBuildOrderByClause(t *testing.T) {
 	baseConn = newBaseConn(conn, true, func(conn *sql.Conn, b bool) (*sql.Conn, error) {
 		return conn, nil
 	})
-	query := fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)
+	query := fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)
 	mock.ExpectQuery(query).WillReturnError(errors.New("invalid connection"))
 	mock.ExpectQuery(query).WillReturnError(errors.New("invalid connection"))
-	mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows(showIndexHeaders).AddRow(table, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", ""))
+	mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows(showIndexHeaders).AddRow(tableName, 0, "PRIMARY", 1, "id", "A", 0, nil, nil, "", "BTREE", "", ""))
 	mockConf.SortByPk = true
-	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, table, false)
+	orderByClause, err = buildOrderByClause(tctx, mockConf, baseConn, database, tableName, false)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 	require.Equal(t, "ORDER BY `id`", orderByClause)
@@ -771,7 +771,7 @@ func TestBuildTableSampleQueries(t *testing.T) {
 			selectFields := strings.Join(quotaCols, ",")
 			meta := &mockTableIR{
 				dbName:           database,
-				tblName:          table,
+				tblName:          tableName,
 				selectedField:    selectFields,
 				hasImplicitRowID: testCase.hasTiDBRowID,
 				colTypes:         handleColTypes,
@@ -784,24 +784,24 @@ func TestBuildTableSampleQueries(t *testing.T) {
 			if !testCase.hasTiDBRowID {
 				rows := sqlmock.NewRows(showIndexHeaders)
 				for i, handleColName := range handleColNames {
-					rows.AddRow(table, 0, "PRIMARY", i, handleColName, "A", 0, nil, nil, "", "BTREE", "", "")
+					rows.AddRow(tableName, 0, "PRIMARY", i, handleColName, "A", 0, nil, nil, "", "BTREE", "", "")
 				}
-				mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)).WillReturnRows(rows)
+				mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)).WillReturnRows(rows)
 			}
 
 			rows := sqlmock.NewRows(handleColNames)
 			for _, handleVal := range handleVals {
 				rows.AddRow(handleVal...)
 			}
-			mock.ExpectQuery(fmt.Sprintf("SELECT .* FROM `%s`.`%s` TABLESAMPLE REGIONS", database, table)).WillReturnRows(rows)
+			mock.ExpectQuery(fmt.Sprintf("SELECT .* FROM `%s`.`%s` TABLESAMPLE REGIONS", database, tableName)).WillReturnRows(rows)
 			// special case, no enough value to split chunks
 			if len(handleVals) == 0 {
 				if !testCase.hasTiDBRowID {
 					rows = sqlmock.NewRows(showIndexHeaders)
 					for i, handleColName := range handleColNames {
-						rows.AddRow(table, 0, "PRIMARY", i, handleColName, "A", 0, nil, nil, "", "BTREE", "", "")
+						rows.AddRow(tableName, 0, "PRIMARY", i, handleColName, "A", 0, nil, nil, "", "BTREE", "", "")
 					}
-					mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)).WillReturnRows(rows)
+					mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)).WillReturnRows(rows)
 					mock.ExpectQuery("SHOW INDEX FROM").WillReturnRows(sqlmock.NewRows(showIndexHeaders))
 				} else {
 					d.conf.Rows = 200000
@@ -828,13 +828,13 @@ func TestBuildTableSampleQueries(t *testing.T) {
 
 			// special case, no value found
 			if len(handleVals) == 0 {
-				query := buildSelectQuery(database, table, selectFields, "", "", orderByClause)
+				query := buildSelectQuery(database, tableName, selectFields, "", "", orderByClause)
 				checkQuery(0, query)
 				continue
 			}
 
 			for i, w := range testCase.expectedWhereClauses {
-				query := buildSelectQuery(database, table, selectFields, "", buildWhereCondition(d.conf, w), orderByClause)
+				query := buildSelectQuery(database, tableName, selectFields, "", buildWhereCondition(d.conf, w), orderByClause)
 				checkQuery(i, query)
 			}
 		}
@@ -1243,7 +1243,7 @@ func TestBuildRegionQueriesWithPartitions(t *testing.T) {
 		taskChan := make(chan Task, 128)
 		meta := &mockTableIR{
 			dbName:           database,
-			tblName:          table,
+			tblName:          tableName,
 			selectedField:    "*",
 			selectedLen:      len(handleColNames),
 			hasImplicitRowID: testCase.hasTiDBRowID,
@@ -1259,14 +1259,14 @@ func TestBuildRegionQueriesWithPartitions(t *testing.T) {
 			rows.AddRow(partition)
 		}
 		mock.ExpectQuery("SELECT PARTITION_NAME from INFORMATION_SCHEMA.PARTITIONS").
-			WithArgs(database, table).WillReturnRows(rows)
+			WithArgs(database, tableName).WillReturnRows(rows)
 
 		if !testCase.hasTiDBRowID {
 			rows = sqlmock.NewRows(showIndexHeaders)
 			for i, handleColName := range handleColNames {
-				rows.AddRow(table, 0, "PRIMARY", i, handleColName, "A", 0, nil, nil, "", "BTREE", "", "")
+				rows.AddRow(tableName, 0, "PRIMARY", i, handleColName, "A", 0, nil, nil, "", "BTREE", "", "")
 			}
-			mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)).WillReturnRows(rows)
+			mock.ExpectQuery(fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)).WillReturnRows(rows)
 		}
 
 		for i, partition := range partitions {
@@ -1274,7 +1274,7 @@ func TestBuildRegionQueriesWithPartitions(t *testing.T) {
 			for _, regionResult := range regionResults[i] {
 				rows.AddRow(regionResult...)
 			}
-			mock.ExpectQuery(fmt.Sprintf("SHOW TABLE `%s`.`%s` PARTITION\\(`%s`\\) REGIONS", escapeString(database), escapeString(table), escapeString(partition))).
+			mock.ExpectQuery(fmt.Sprintf("SHOW TABLE `%s`.`%s` PARTITION\\(`%s`\\) REGIONS", escapeString(database), escapeString(tableName), escapeString(partition))).
 				WillReturnRows(rows)
 		}
 
@@ -1285,7 +1285,7 @@ func TestBuildRegionQueriesWithPartitions(t *testing.T) {
 		chunkIdx := 0
 		for i, partition := range partitions {
 			for _, w := range testCase.expectedWhereClauses[i] {
-				query := buildSelectQuery(database, table, "*", partition, buildWhereCondition(d.conf, w), orderByClause)
+				query := buildSelectQuery(database, tableName, "*", partition, buildWhereCondition(d.conf, w), orderByClause)
 				task := <-taskChan
 				taskTableData, ok := task.(*TaskTableData)
 				require.True(t, ok)
@@ -1671,7 +1671,7 @@ func TestPickupPossibleField(t *testing.T) {
 
 	meta := &mockTableIR{
 		dbName:   database,
-		tblName:  table,
+		tblName:  tableName,
 		colNames: []string{"string1", "int1", "int2", "float1", "bin1", "int3", "bool1", "int4"},
 		colTypes: []string{"VARCHAR", "INT", "BIGINT", "FLOAT", "BINARY", "MEDIUMINT", "BOOL", "TINYINT"},
 		specCmt: []string{
@@ -1701,11 +1701,11 @@ func TestPickupPossibleField(t *testing.T) {
 			"int1",
 			false,
 			[][]driver.Value{
-				{table, 0, "PRIMARY", 1, "int1", "A", 2, nil, nil, "", "BTREE", "", ""},
-				{table, 0, "PRIMARY", 2, "float1", "A", 2, nil, nil, "", "BTREE", "", ""},
-				{table, 0, "int2", 1, "int2", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "string1", 1, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "int3", 1, "int3", "A", 20, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "PRIMARY", 1, "int1", "A", 2, nil, nil, "", "BTREE", "", ""},
+				{tableName, 0, "PRIMARY", 2, "float1", "A", 2, nil, nil, "", "BTREE", "", ""},
+				{tableName, 0, "int2", 1, "int2", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "string1", 1, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "int3", 1, "int3", "A", 20, nil, nil, "YES", "BTREE", "", ""},
 			},
 		}, // primary key doesn't have integer at seq 1, use unique key with integer
 		{
@@ -1713,11 +1713,11 @@ func TestPickupPossibleField(t *testing.T) {
 			"int2",
 			false,
 			[][]driver.Value{
-				{table, 0, "PRIMARY", 1, "float1", "A", 2, nil, nil, "", "BTREE", "", ""},
-				{table, 0, "PRIMARY", 2, "int1", "A", 2, nil, nil, "", "BTREE", "", ""},
-				{table, 0, "int2", 1, "int2", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "string1", 1, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "int3", 1, "int3", "A", 20, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "PRIMARY", 1, "float1", "A", 2, nil, nil, "", "BTREE", "", ""},
+				{tableName, 0, "PRIMARY", 2, "int1", "A", 2, nil, nil, "", "BTREE", "", ""},
+				{tableName, 0, "int2", 1, "int2", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "string1", 1, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "int3", 1, "int3", "A", 20, nil, nil, "YES", "BTREE", "", ""},
 			},
 		}, // several unique keys, use unique key who has a integer in seq 1
 		{
@@ -1725,11 +1725,11 @@ func TestPickupPossibleField(t *testing.T) {
 			"int1",
 			false,
 			[][]driver.Value{
-				{table, 0, "u1", 1, "int1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u1", 2, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u1", 3, "bin1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u2", 1, "float1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u2", 2, "int2", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u1", 1, "int1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u1", 2, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u1", 3, "bin1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u2", 1, "float1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u2", 2, "int2", "A", 2, nil, nil, "YES", "BTREE", "", ""},
 			},
 		}, // several unique keys and ordinary keys, use unique key who has a integer in seq 1
 		{
@@ -1737,12 +1737,12 @@ func TestPickupPossibleField(t *testing.T) {
 			"int1",
 			false,
 			[][]driver.Value{
-				{table, 0, "u1", 1, "float1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u1", 2, "int2", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u2", 1, "int1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u2", 2, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u2", 3, "bin1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "int3", 1, "int3", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u1", 1, "float1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u1", 2, "int2", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u2", 1, "int1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u2", 2, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u2", 3, "bin1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "int3", 1, "int3", "A", 2, nil, nil, "YES", "BTREE", "", ""},
 			},
 		}, // several unique keys and ordinary keys, use unique key who has less columns
 		{
@@ -1750,12 +1750,12 @@ func TestPickupPossibleField(t *testing.T) {
 			"int2",
 			false,
 			[][]driver.Value{
-				{table, 0, "u1", 1, "int1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u1", 2, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u1", 3, "bin1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u2", 1, "int2", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u2", 2, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "int3", 1, "int3", "A", 20, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u1", 1, "int1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u1", 2, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u1", 3, "bin1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u2", 1, "int2", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u2", 2, "string1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "int3", 1, "int3", "A", 20, nil, nil, "YES", "BTREE", "", ""},
 			},
 		}, // several unique keys and ordinary keys, use key who has max cardinality
 		{
@@ -1763,19 +1763,19 @@ func TestPickupPossibleField(t *testing.T) {
 			"int2",
 			false,
 			[][]driver.Value{
-				{table, 0, "PRIMARY", 1, "string1", "A", 2, nil, nil, "", "BTREE", "", ""},
-				{table, 0, "u1", 1, "float1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 0, "u1", 2, "int3", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "i1", 1, "int1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "i2", 1, "int2", "A", 5, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "i2", 2, "bool1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "i3", 1, "bin1", "A", 10, nil, nil, "YES", "BTREE", "", ""},
-				{table, 1, "i3", 2, "int4", "A", 10, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "PRIMARY", 1, "string1", "A", 2, nil, nil, "", "BTREE", "", ""},
+				{tableName, 0, "u1", 1, "float1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 0, "u1", 2, "int3", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "i1", 1, "int1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "i2", 1, "int2", "A", 5, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "i2", 2, "bool1", "A", 2, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "i3", 1, "bin1", "A", 10, nil, nil, "YES", "BTREE", "", ""},
+				{tableName, 1, "i3", 2, "int4", "A", 10, nil, nil, "YES", "BTREE", "", ""},
 			},
 		},
 	}
 
-	query := fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, table)
+	query := fmt.Sprintf("SHOW INDEX FROM `%s`.`%s`", database, tableName)
 	for i, testCase := range testCases {
 		t.Logf("case #%d", i)
 

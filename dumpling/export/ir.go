@@ -10,6 +10,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/br/pkg/version"
 	tcontext "github.com/pingcap/tidb/dumpling/context"
+	"github.com/pingcap/tidb/types"
 )
 
 // TableDataIR is table data intermediate representation.
@@ -55,7 +56,7 @@ type RowReceiverStringer interface {
 
 // Stringer is an interface which represents sql types that support writing to buffer in sql/csv type
 type Stringer interface {
-	WriteToBuffer(*bytes.Buffer, bool)
+	WriteToBuffer([]types.Datum, bool)
 	WriteToBufferInCsv(*bytes.Buffer, bool, *csvOption)
 }
 
@@ -104,4 +105,13 @@ func setTableMetaFromRows(serverType version.ServerType, rows *sql.Rows) (TableM
 		selectedLen:   len(nms),
 		specCmts:      getSpecialComments(serverType),
 	}, nil
+}
+
+// Row is the content of a row.
+type Row struct {
+	// RowID is the row id of the row.
+	// as objects of this struct is reused, this RowID is increased when reading
+	// next row.
+	RowID int64
+	Row   []types.Datum
 }

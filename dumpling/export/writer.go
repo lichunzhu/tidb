@@ -8,12 +8,21 @@ import (
 	"fmt"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/tidb/br/pkg/lightning/backend"
+	"github.com/pingcap/tidb/br/pkg/lightning/backend/encode"
+	"github.com/pingcap/tidb/br/pkg/lightning/backend/kv"
+	"github.com/pingcap/tidb/br/pkg/lightning/common"
+	"github.com/pingcap/tidb/br/pkg/lightning/log"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tidb/br/pkg/utils"
 	tcontext "github.com/pingcap/tidb/dumpling/context"
+	"github.com/pingcap/tidb/parser/mysql"
+	"github.com/pingcap/tidb/table"
+	"github.com/pingcap/tidb/tablecodec"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 // Writer is the abstraction that keep pulling data from database and write to files.
@@ -26,6 +35,11 @@ type Writer struct {
 	extStorage storage.ExternalStorage
 	fileFmt    FileFormat
 	metrics    *metrics
+	wg         *errgroup.Group
+
+	dataEngine  *backend.OpenedEngine
+	indexEngine *backend.OpenedEngine
+	tableMeta   table.Table
 
 	receivedTaskCount int
 
@@ -184,49 +198,259 @@ func (w *Writer) WriteSequenceMeta(db, sequence, createSQL string) error {
 	return w.writeMetaToFile(tctx, db, createSQL, fileName+".sql")
 }
 
+func getImportantSysVars() map[string]string {
+	res := map[string]string{}
+	for k, defVal := range common.DefaultImportantVariables {
+		res[k] = defVal
+	}
+	for k, defVal := range common.DefaultImportVariablesTiDB {
+		res[k] = defVal
+	}
+	return res
+}
+
 // WriteTableData writes table data to a file with retry
 func (w *Writer) WriteTableData(meta TableMeta, ir TableDataIR, currentChunk int) error {
-	tctx, conf, conn := w.tctx, w.conf, w.conn
-	retryTime := 0
-	var lastErr error
-	return utils.WithRetry(tctx, func() (err error) {
+	tctx, _, conn := w.tctx, w.conf, w.conn
+	err := ir.Start(tctx, conn)
+	if err != nil {
+		tctx.L().Warn("failed to start table chunk", zap.Error(err))
+		return err
+	}
+	lastRow := make(chan Row)
+	nextRow := make(chan struct{})
+	wg := w.wg
+	lCtx := tctx
+	lastRowIDMax := int64(currentChunk) * 30_000_000
+	wg.Go(func() error {
+		_, err2 := WriteInsert(lCtx, meta, ir, lastRow, lastRowIDMax, nextRow)
+		return err2
+	})
+	dataWriterCfg := &backend.LocalWriterConfig{
+		IsKVSorted: true,
+	}
+	dataWriter, err := w.dataEngine.LocalWriter(lCtx, dataWriterCfg)
+	if err != nil {
+		return err
+	}
+	indexWriter, err := w.indexEngine.LocalWriter(lCtx, &backend.LocalWriterConfig{})
+	if err != nil {
+		return err
+	}
+	encoder, err := kv.NewTableKVEncoder(&encode.EncodingConfig{
+		SessionOptions: encode.SessionOptions{
+			SQLMode:        mysql.ModeStrictAllTables,
+			Timestamp:      time.Now().Unix(),
+			SysVars:        getImportantSysVars(),
+			AutoRandomSeed: lastRowIDMax,
+		},
+		Path:   fmt.Sprintf("%d", currentChunk),
+		Table:  w.tableMeta,
+		Logger: log.Logger{Logger: tctx.L().With(zap.String("path", fmt.Sprintf("%d", currentChunk)))},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	perms := make([]int, len(w.tableMeta.Cols()))
+	for i := 0; i < len(w.tableMeta.Cols()); i++ {
+		perms[i] = i
+	}
+	cp := &chunkProcessor{
+		lastRow:            lastRow,
+		nextRow:            nextRow,
+		kvsCh:              make(chan []*kv.Pairs, maxKVQueueSize),
+		dataWriter:         dataWriter,
+		indexWriter:        indexWriter,
+		encoder:            encoder,
+		columnPermutations: perms,
+		// kvCodec:       tableImporter.kvStore.GetCodec(),
+	}
+	wg.Go(func() error {
 		defer func() {
-			lastErr = err
-			if err != nil {
-				IncCounter(w.metrics.errorCount)
+			if _, err2 := dataWriter.Close(lCtx); err2 != nil {
+				lCtx.L().Warn("close data writer failed", zap.Error(err2))
 			}
 		}()
-		retryTime++
-		tctx.L().Debug("trying to dump table chunk", zap.Int("retryTime", retryTime), zap.String("db", meta.DatabaseName()),
-			zap.String("table", meta.TableName()), zap.Int("chunkIndex", currentChunk), zap.NamedError("lastError", lastErr))
-		// don't rebuild connection when dump for the first time
-		if retryTime > 1 {
-			conn, err = w.rebuildConnFn(conn, true)
-			w.conn = conn
-			if err != nil {
-				return
+		return cp.deliverLoop(lCtx)
+	})
+	wg.Go(func() error {
+		defer func() {
+			if _, err2 := indexWriter.Close(lCtx); err2 != nil {
+				lCtx.L().Warn("close index writer failed", zap.Error(err2))
+			}
+		}()
+		return cp.encodeLoop(lCtx)
+	})
+
+	return nil
+}
+
+// tableKVEncoder encodes a row of data into a KV pair.
+type tableKVEncoder struct {
+	*kv.BaseKVEncoder
+}
+
+// Close implements the Encoder interface.
+func (kvcodec *tableKVEncoder) Close() {
+	kvcodec.SessionCtx.Close()
+}
+
+type deliverKVBatch struct {
+	dataKVs  kv.Pairs
+	indexKVs kv.Pairs
+	sz       uint64
+}
+
+func newDeliverKVBatch() *deliverKVBatch {
+	return &deliverKVBatch{}
+}
+
+func (b *deliverKVBatch) reset() {
+	b.dataKVs.Clear()
+	b.indexKVs.Clear()
+	b.sz = 0
+}
+
+func (b *deliverKVBatch) size() uint64 {
+	return b.sz
+}
+
+func (b *deliverKVBatch) add(kvs *kv.Pairs) {
+	for _, pair := range kvs.Pairs {
+		b.sz += uint64(len(pair.Key) + len(pair.Val))
+		if tablecodec.IsRecordKey(pair.Key) {
+			b.dataKVs.Pairs = append(b.dataKVs.Pairs, pair)
+		} else {
+			b.indexKVs.Pairs = append(b.indexKVs.Pairs, pair)
+		}
+	}
+
+	// the related buf is shared, so we only need to set it into one of the kvs so it can be released
+	if kvs.BytesBuf != nil {
+		b.dataKVs.BytesBuf = kvs.BytesBuf
+		b.dataKVs.MemBuf = kvs.MemBuf
+	}
+}
+
+type chunkProcessor struct {
+	*Writer
+	lastRow            chan Row
+	nextRow            chan struct{}
+	kvsCh              chan []*kv.Pairs
+	columnPermutations []int
+	encoder            encode.Encoder
+	dataWriter         backend.EngineWriter
+	indexWriter        backend.EngineWriter
+}
+
+func (p *chunkProcessor) deliverLoop(tctx *tcontext.Context) error {
+	kvBatch := newDeliverKVBatch()
+
+	for {
+	outer:
+		for kvBatch.size() < MinDeliverBytes {
+			select {
+			case kvPacket, ok := <-p.kvsCh:
+				if !ok {
+					break outer
+				}
+				for _, row := range kvPacket {
+					for _, p := range row.Pairs {
+						fmt.Printf("debug!:%s %s %s\n", string(p.Key), string(p.Val), p.RowID)
+					}
+					kvBatch.add(row)
+				}
+			case <-tctx.Done():
+				return tctx.Err()
 			}
 		}
-		err = ir.Start(tctx, conn)
-		if err != nil {
-			tctx.L().Warn("failed to start table chunk", zap.Error(err))
-			return
+
+		if kvBatch.size() == 0 {
+			break
 		}
-		if conf.SQL != "" {
-			rows := ir.RawRows()
-			meta, err = setTableMetaFromRows(w.conf.ServerInfo.ServerType, rows)
-			if err != nil {
-				return err
-			}
-			if err = rows.Err(); err != nil {
+
+		err := func() error {
+			if err := p.dataWriter.AppendRows(tctx, nil, &kvBatch.dataKVs); err != nil {
+				if !common.IsContextCanceledError(err) {
+					tctx.L().Error("write to data engine failed", log.ShortError(err))
+				}
 				return errors.Trace(err)
 			}
-		}
-		defer func() {
-			_ = ir.Close()
+			if err := p.indexWriter.AppendRows(tctx, nil, &kvBatch.indexKVs); err != nil {
+				if !common.IsContextCanceledError(err) {
+					tctx.L().Error("write to index engine failed", log.ShortError(err))
+				}
+				return errors.Trace(err)
+			}
+
+			return nil
 		}()
-		return w.tryToWriteTableData(tctx, meta, ir, currentChunk)
-	}, newRebuildConnBackOffer(canRebuildConn(conf.Consistency, conf.TransactionalConsistency)))
+		if err != nil {
+			return err
+		}
+
+		kvBatch.reset()
+	}
+
+	return nil
+}
+
+func (p *chunkProcessor) encodeLoop(tctx *tcontext.Context) error {
+	defer close(p.kvsCh)
+
+	send := func(kvs []*kv.Pairs) error {
+		select {
+		case p.kvsCh <- kvs:
+			return nil
+		case <-tctx.Done():
+			return tctx.Err()
+		}
+	}
+
+	var err error
+	reachEOF := false
+	for !reachEOF {
+		canDeliver := false
+		rowBatch := make([]*kv.Pairs, 0, MinDeliverRowCnt)
+		var kvSize uint64
+		for !canDeliver {
+			lastRow, ok := <-p.lastRow
+			if !ok {
+				reachEOF = true
+				break
+			}
+			// sql -> kv
+			row, encodeErr := p.encoder.Encode(lastRow.Row, lastRow.RowID, p.columnPermutations, 0)
+			if encodeErr != nil {
+				<-p.nextRow
+				return encodeErr
+			}
+			kvs, ok := row.(*kv.Pairs)
+			if !ok {
+				<-p.nextRow
+				return errors.New("invalid row type")
+			}
+			<-p.nextRow
+
+			rowBatch = append(rowBatch, kvs)
+			kvSize += kvs.Size()
+			// pebble cannot allow > 4.0G kv in one batch.
+			// we will meet pebble panic when import sql file and each kv has the size larger than 4G / maxKvPairsCnt.
+			// so add this check.
+			if kvSize >= MinDeliverBytes || len(rowBatch) >= MinDeliverRowCnt {
+				canDeliver = true
+				kvSize = 0
+			}
+		}
+
+		if len(rowBatch) > 0 {
+			if err = send(rowBatch); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func (w *Writer) tryToWriteTableData(tctx *tcontext.Context, meta TableMeta, ir TableDataIR, curChkIdx int) error {
@@ -240,7 +464,7 @@ func (w *Writer) tryToWriteTableData(tctx *tcontext.Context, meta TableMeta, ir 
 	somethingIsWritten := false
 	for {
 		fileWriter, tearDown := buildInterceptFileWriter(tctx, w.extStorage, fileName, conf.CompressType)
-		n, err := format.WriteInsert(tctx, conf, meta, ir, fileWriter, w.metrics)
+		n, err := format.WriteInsert(tctx, conf, meta, ir, fileWriter, w.metrics, nil)
 		tearDownErr := tearDown(tctx)
 		if err != nil {
 			return err
