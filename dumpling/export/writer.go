@@ -255,6 +255,7 @@ func (w *Writer) WriteTableData(meta TableMeta, ir TableDataIR, currentChunk int
 	for i := 0; i < len(w.tableMeta.Cols()); i++ {
 		perms[i] = i
 	}
+	perms = append(perms, -1)
 	cp := &chunkProcessor{
 		lastRow:            lastRow,
 		nextRow:            nextRow,
@@ -355,9 +356,9 @@ func (p *chunkProcessor) deliverLoop(tctx *tcontext.Context) error {
 					break outer
 				}
 				for _, row := range kvPacket {
-					for _, p := range row.Pairs {
-						fmt.Printf("debug!:%s %s %s\n", string(p.Key), string(p.Val), p.RowID)
-					}
+					// for _, p := range row.Pairs {
+					// 	// fmt.Printf("debug!:%s %s %s\n", string(p.Key), string(p.Val), p.RowID)
+					// }
 					kvBatch.add(row)
 				}
 			case <-tctx.Done():

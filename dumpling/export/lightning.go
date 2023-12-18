@@ -16,15 +16,15 @@ import (
 
 const (
 	statusPort      = "10080"
-	pdPath          = "127.0.0.1:2379"
+	pdPath          = "10.2.6.83:2379"
 	sortDir         = "/tmp/tidb_lightning_sort_dir"
-	fullTableName   = "`test`.`clustered_cache1`"
+	fullTableName   = "`test`.`t`"
 	regionSplitKeys = config.SplitRegionKeys
 	regionSplitSize = config.SplitRegionSize
 )
 
 func newLocalBackend(ctx context.Context, conf *Config) (*local.Backend, error) {
-	hostPort := net.JoinHostPort("127.0.0.1", statusPort)
+	hostPort := net.JoinHostPort("10.2.7.242", statusPort)
 	tls, err := common.NewTLS(
 		conf.Security.CAPath,
 		conf.Security.CertPath,

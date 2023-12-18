@@ -59,12 +59,12 @@ var errEmptyHandleVals = errors.New("empty handleVals for TiDB table")
 var enablePagingVersion = semver.New("6.2.0")
 
 const (
-	createTableSQL = "" +
-		"CREATE TABLE `clustered_cache1` (\n" +
-		"`id` int(11) NOT NULL AUTO_INCREMENT,\n" +
-		"`v` int(11) DEFAULT NULL,\n" +
-		"PRIMARY KEY (`id`) /*T![clustered_index] CLUSTERED */\n" +
-		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin /*T![auto_id_cache] AUTO_ID_CACHE=1 */;\n"
+	createTableSQL = `CREATE TABLE t (
+    id CHAR(40),
+    name CHAR(40),
+    address CHAR(40),
+    account INT(11),
+    UNIQUE KEY uid(id))`
 	tableID = 80
 	dbName  = "test"
 )
