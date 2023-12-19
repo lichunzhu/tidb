@@ -221,7 +221,7 @@ func (w *Writer) WriteTableData(meta TableMeta, ir TableDataIR, currentChunk int
 	nextRow := make(chan struct{})
 	wg := w.wg
 	lCtx := tctx
-	lastRowIDMax := int64(currentChunk) * 30_000_000
+	lastRowIDMax := int64(currentChunk) * 50_000_000
 	wg.Go(func() error {
 		_, err2 := WriteInsert(lCtx, meta, ir, lastRow, lastRowIDMax, nextRow)
 		return err2

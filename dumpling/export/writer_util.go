@@ -156,12 +156,12 @@ func WriteInsert(
 	lastRowID int64,
 	nextRow chan struct{},
 ) (n uint64, err error) {
+	defer close(lastRow)
+	defer close(nextRow)
 	fileRowIter := tblIR.Rows()
 	if !fileRowIter.HasNext() {
 		return 0, fileRowIter.Error()
 	}
-	defer close(lastRow)
-	defer close(nextRow)
 
 	var (
 		row             = MakeRowReceiver(meta.ColumnTypes())
