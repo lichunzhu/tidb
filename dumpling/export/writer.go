@@ -217,6 +217,9 @@ func (w *Writer) WriteTableData(meta TableMeta, ir TableDataIR, currentChunk int
 		tctx.L().Warn("failed to start table chunk", zap.Error(err))
 		return err
 	}
+	defer func() {
+		_ = ir.Close()
+	}()
 	lastRow := make(chan Row)
 	nextRow := make(chan struct{})
 	wg := w.wg
@@ -224,6 +227,9 @@ func (w *Writer) WriteTableData(meta TableMeta, ir TableDataIR, currentChunk int
 	lastRowIDMax := int64(currentChunk) * 50_000_000
 	wg.Go(func() error {
 		_, err2 := WriteInsert(lCtx, meta, ir, lastRow, lastRowIDMax, nextRow)
+		if err2 != nil {
+			tctx.L().Error("fail to do WriteInsert", zap.Error(err2))
+		}
 		return err2
 	})
 	dataWriterCfg := &backend.LocalWriterConfig{
@@ -272,7 +278,11 @@ func (w *Writer) WriteTableData(meta TableMeta, ir TableDataIR, currentChunk int
 				lCtx.L().Warn("close data writer failed", zap.Error(err2))
 			}
 		}()
-		return cp.deliverLoop(lCtx)
+		err := cp.deliverLoop(lCtx)
+		if err != nil {
+			tctx.L().Error("fail to do deliverLoop", zap.Error(err))
+		}
+		return err
 	})
 	wg.Go(func() error {
 		defer func() {
@@ -280,7 +290,11 @@ func (w *Writer) WriteTableData(meta TableMeta, ir TableDataIR, currentChunk int
 				lCtx.L().Warn("close index writer failed", zap.Error(err2))
 			}
 		}()
-		return cp.encodeLoop(lCtx)
+		err := cp.encodeLoop(lCtx)
+		if err != nil {
+			tctx.L().Error("fail to do deliverLoop", zap.Error(err))
+		}
+		return err
 	})
 
 	return nil

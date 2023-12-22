@@ -60,12 +60,12 @@ var enablePagingVersion = semver.New("6.2.0")
 
 const (
 	createTableSQL = `CREATE TABLE t (
-    id CHAR(40),
+    id INT(11),
     name CHAR(40),
     address CHAR(40),
     account INT(11),
     UNIQUE KEY uid(id))`
-	tableID = 80
+	tableID = 90
 	dbName  = "test"
 )
 
@@ -447,9 +447,6 @@ func (d *Dumper) startWriters(tctx *tcontext.Context, wg *errgroup.Group, taskCh
 		writers[i] = writer
 	}
 	tearDown := func() {
-		for _, w := range writers {
-			_ = w.conn.Close()
-		}
 		err = localBackend.FlushAllEngines(tctx)
 		if err != nil {
 			panic(err)
@@ -470,6 +467,9 @@ func (d *Dumper) startWriters(tctx *tcontext.Context, wg *errgroup.Group, taskCh
 		} else if _, err = importAndCleanup(d.tctx, closedEngine, localBackend); err != nil {
 			d.tctx.L().Error("fail to importAndCleanup", zap.Error(err))
 			return
+		}
+		for _, w := range writers {
+			_ = w.conn.Close()
 		}
 	}
 	return writers, tearDown, nil
